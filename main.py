@@ -4,6 +4,7 @@ from contextlib import asynccontextmanager
 
 import uvicorn
 from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
 from aiogram import Bot, Dispatcher
 from aiogram.client.default import DefaultBotProperties
 from aiogram.enums import ParseMode
@@ -45,6 +46,17 @@ async def lifespan(app: FastAPI):
 
 # ================== FASTAPI ==================
 app = FastAPI(title="Apex Backend", lifespan=lifespan)
+
+# CORS — иначе Telegram Mini App (другой origin) блокирует fetch
+from fastapi.middleware.cors import CORSMiddleware
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 app.include_router(api_router, prefix="/api")
 
 @app.get("/")
