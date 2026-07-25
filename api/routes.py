@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Header, HTTPException, Depends
+from fastapi import APIRouter, Header, HTTPException, Depends, Query
 from pydantic import BaseModel
 from typing import Optional
 import database as db
@@ -25,10 +25,21 @@ class RegisterUser(BaseModel):
     username: Optional[str] = None
     full_name: Optional[str] = None
 
+class BlockUpdate(BaseModel):
+    is_blocked: bool
+
 # ================== ПРОВЕРКА СЕКРЕТНОГО КЛЮЧА ==================
 
-async def verify_secret(x_secret_key: str = Header(...)):
-    if x_secret_key != SECRET_KEY:
+async def verify_secret(
+    x_secret_key: Optional[str] = Header(None, alias="x-secret-key"),
+    key: Optional[str] = Query(None, description="fallback secret for WebView"),
+):
+    """
+    Принимаем секрет из заголовка x-secret-key ИЛИ query ?key=
+    (некоторые WebView/прокси режут custom headers).
+    """
+    provided = (x_secret_key or key or "").strip()
+    if not provided or provided != SECRET_KEY:
         raise HTTPException(status_code=403, detail="Доступ запрещён")
     return True
 
@@ -118,6 +129,20 @@ async def add_user_bonus(user_id: int, data: BonusAdd, authorized: bool = Depend
         "new_bonus_balance": updated_user.bonus_balance
     }
 
+@router.post("/user/{user_id}/block")
+async def update_user_block(user_id: int, data: BlockUpdate, authorized: bool = Depends(verify_secret)):
+    """Заблокировать / разблокировать пользователя (админ-бот)"""
+    user = await db.get_user(user_id)
+    if not user:
+        raise HTTPException(status_code=404, detail="Пользователь не найден")
+
+    await db.set_blocked(user_id, data.is_blocked)
+    updated = await db.get_user(user_id)
+    return {
+        "status": "ok",
+        "is_blocked": updated.is_blocked,
+    }
+
 @router.get("/users")
 async def get_all_users(authorized: bool = Depends(verify_secret)):
     """Получить список всех пользователей (для админки)"""
@@ -133,3 +158,9 @@ async def get_all_users(authorized: bool = Depends(verify_secret)):
         }
         for u in users
     ]
+
+
+@router.get("/health/db")
+async def health_db(authorized: bool = Depends(verify_secret)):
+    """Проверка, что SQLite доступна и пишет на диск."""
+    return await db.db_status()
