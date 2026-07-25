@@ -16,6 +16,7 @@ from pathlib import Path
 from typing import Any, Optional
 
 from config import DATABASE_PATH, TARIFFS
+from models import User
 
 
 def _now_iso() -> str:
@@ -923,5 +924,151 @@ class Database:
         return len(demo)
 
 
-# Глобальный экземпляр (инициализируется в bot.py)
+# Глобальный экземпляр (инициализируется в bot.py / main.py через init_db)
 db = Database()
+
+# ---------------------------------------------------------------------------
+# Совместимость с main.py, api/routes.py, bot/user_bot.py, bot/handlers.py
+# (старый функциональный API поверх class-based Database)
+# ---------------------------------------------------------------------------
+
+DB_PATH: Path = Path(DATABASE_PATH)
+DB_NAME: str = str(DB_PATH)
+
+
+def _to_user(data: dict | None) -> User | None:
+    """dict из SQLite → dataclass User (для API и встроенных ботов)."""
+    if not data:
+        return None
+    return User(
+        user_id=int(data["user_id"]),
+        username=data.get("username"),
+        full_name=data.get("full_name"),
+        balance=float(data.get("balance") or 0),
+        tariff=data.get("tariff") or "LITE",
+        bonus_balance=float(data.get("bonus_balance") or 0),
+        is_blocked=bool(data.get("is_blocked")),
+        registered_at=data.get("registered_at"),
+        last_active=data.get("last_active"),
+    )
+
+
+async def _ensure_connected() -> None:
+    """Подключить глобальный db, если ещё не подключён (FastAPI / bot)."""
+    if db._conn is None:
+        await db.connect()
+
+
+async def init_db() -> None:
+    """Инициализация БД при старте main.py (lifespan)."""
+    await _ensure_connected()
+
+
+async def db_status() -> dict:
+    """Health-check для / и /api/health/db."""
+    await _ensure_connected()
+    path = Path(db.path)
+    size = path.stat().st_size if path.exists() else 0
+    return {
+        "path": str(path),
+        "exists": path.exists(),
+        "size_bytes": size,
+        "users": await db.get_users_count(),
+    }
+
+
+async def get_user(user_id: int) -> User | None:
+    await _ensure_connected()
+    return _to_user(await db.get_user(int(user_id)))
+
+
+async def create_user(
+    user_id: int,
+    username: str | None = None,
+    full_name: str | None = None,
+) -> User:
+    """Создать или обновить пользователя (ensure_user)."""
+    await _ensure_connected()
+    row = await db.ensure_user(int(user_id), username=username, full_name=full_name)
+    user = _to_user(row)
+    assert user is not None
+    return user
+
+
+async def update_balance(
+    user_id: int,
+    amount: float,
+    description: str = "Изменение баланса",
+    admin_id: int | None = None,
+) -> User | None:
+    """Установить абсолютный баланс (старое имя update_balance)."""
+    await _ensure_connected()
+    row = await db.set_balance(
+        int(user_id),
+        float(amount),
+        tx_type="admin_set",
+        comment=description,
+        admin_id=admin_id,
+    )
+    return _to_user(row)
+
+
+async def change_tariff(
+    user_id: int,
+    tariff: str,
+    admin_id: int | None = None,
+) -> User | None:
+    await _ensure_connected()
+    row = await db.set_tariff(int(user_id), tariff, admin_id=admin_id)
+    return _to_user(row)
+
+
+async def add_bonus(
+    user_id: int,
+    amount: float,
+    description: str = "Бонус от администратора",
+    admin_id: int | None = None,
+) -> User | None:
+    await _ensure_connected()
+    row = await db.add_bonus(
+        int(user_id),
+        float(amount),
+        comment=description,
+        admin_id=admin_id,
+    )
+    return _to_user(row)
+
+
+async def set_blocked(
+    user_id: int,
+    is_blocked: bool,
+    admin_id: int | None = None,
+) -> User | None:
+    await _ensure_connected()
+    row = await db.set_blocked(int(user_id), bool(is_blocked))
+    return _to_user(row)
+
+
+async def get_all_users() -> list[User]:
+    """Все пользователи (для /api/users и встроенной админ-панели)."""
+    await _ensure_connected()
+    result: list[User] = []
+    page = 0
+    per_page = 200
+    while True:
+        batch = await db.get_users_page(page=page, per_page=per_page)
+        if not batch:
+            break
+        for row in batch:
+            user = _to_user(row)
+            if user:
+                result.append(user)
+        if len(batch) < per_page:
+            break
+        page += 1
+    return result
+
+
+async def count_users() -> int:
+    await _ensure_connected()
+    return await db.get_users_count()

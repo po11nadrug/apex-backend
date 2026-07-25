@@ -1,8 +1,8 @@
 """
-Конфигурация Apex Backend / Admin-bot.
+Конфигурация Apex Backend + Admin-bot.
 
 Все переменные опциональны: при отсутствии — разумные дефолты.
-Импорт config никогда не должен падать из-за пустого .env.
+Импорт config никогда не падает (нет raise ValueError).
 """
 
 from __future__ import annotations
@@ -26,26 +26,58 @@ def _env_bool(name: str, default: bool = False) -> bool:
     return str(raw).strip().lower() in {"1", "true", "yes", "on"}
 
 
+def _env_int(name: str, default: int) -> int:
+    raw = _env(name)
+    if not raw:
+        return default
+    try:
+        return int(raw)
+    except ValueError:
+        return default
+
+
+def _resolve_database_path() -> str:
+    """
+    DATABASE_PATH env → Railway volume → /data/database.db (Linux/Railway)
+    → database.db рядом с config.py (локальная Windows/dev).
+    """
+    explicit = _env("DATABASE_PATH")
+    if explicit:
+        return explicit
+
+    volume = _env("RAILWAY_VOLUME_MOUNT_PATH")
+    if volume:
+        return str(Path(volume).expanduser() / "database.db")
+
+    # Railway / Linux volume: /data существует как mount
+    # На Windows Path('/data') → C:\\data — не используем как дефолт.
+    if os.name != "nt":
+        data_dir = Path("/data")
+        try:
+            if data_dir.is_dir():
+                return str(data_dir / "database.db")
+        except OSError:
+            pass
+
+    return str(Path(__file__).resolve().parent / "database.db")
+
+
 # ---------------------------------------------------------------------------
 # Telegram-токены
 # ---------------------------------------------------------------------------
 
-# Токен АДМИН-бота (панель)
-ADMIN_BOT_TOKEN = _env("ADMIN_BOT_TOKEN")
+ADMIN_BOT_TOKEN: str = _env("ADMIN_BOT_TOKEN")
+USER_BOT_TOKEN: str = _env("USER_BOT_TOKEN")
 
-# Токен бота ПРИЛОЖЕНИЯ (клиенты жмут /start)
-USER_BOT_TOKEN = _env("USER_BOT_TOKEN")
-
-# Совместимость: bot.py ждёт BOT_TOKEN
 # Приоритет: BOT_TOKEN → ADMIN_BOT_TOKEN → USER_BOT_TOKEN
-BOT_TOKEN = _env("BOT_TOKEN") or ADMIN_BOT_TOKEN or USER_BOT_TOKEN or ""
+BOT_TOKEN: str = _env("BOT_TOKEN") or ADMIN_BOT_TOKEN or USER_BOT_TOKEN or ""
 
 # ---------------------------------------------------------------------------
 # Админы
 # ---------------------------------------------------------------------------
 
-_admin_ids_raw = _env("ADMIN_IDS")
 ADMIN_IDS: list[int] = []
+_admin_ids_raw = _env("ADMIN_IDS")
 if _admin_ids_raw:
     for part in _admin_ids_raw.split(","):
         part = part.strip()
@@ -53,42 +85,29 @@ if _admin_ids_raw:
             ADMIN_IDS.append(int(part))
 
 # ---------------------------------------------------------------------------
-# Секреты API
+# Секреты / API
 # ---------------------------------------------------------------------------
 
-SECRET_KEY = _env("SECRET_KEY")
-
-# Ключ, которым admin-bot ходит в HTTP API (часто = SECRET_KEY)
-API_SECRET_KEY = _env("API_SECRET_KEY") or SECRET_KEY or ""
-
-# Базовый URL бэкенда для api_client / remote sync
-API_URL = _env("API_URL", "http://127.0.0.1:8000")
-
-WEBAPP_URL = _env("WEBAPP_URL")
+SECRET_KEY: str = _env("SECRET_KEY")
+API_SECRET_KEY: str = _env("API_SECRET_KEY") or SECRET_KEY or ""
+API_URL: str = _env("API_URL", "http://127.0.0.1:8000")
+WEBAPP_URL: str = _env("WEBAPP_URL")
 
 # ---------------------------------------------------------------------------
 # База данных
 # ---------------------------------------------------------------------------
 
-# Явный DATABASE_PATH → иначе Volume на Railway → иначе database.db рядом с кодом
-_db_explicit = _env("DATABASE_PATH")
-_volume = _env("RAILWAY_VOLUME_MOUNT_PATH")
-
-if _db_explicit:
-    DATABASE_PATH = _db_explicit
-elif _volume:
-    DATABASE_PATH = str(Path(_volume).expanduser() / "database.db")
-else:
-    # Локально — database.db; на многих хостингах volume = /data
-    _data_default = Path("/data/database.db")
-    if _data_default.parent.is_dir():
-        DATABASE_PATH = str(_data_default)
-    else:
-        DATABASE_PATH = str(Path(__file__).resolve().parent / "database.db")
-
-# ---------------------------------------------------------------------------
-# Прочее
-# ---------------------------------------------------------------------------
+DATABASE_PATH: str = _resolve_database_path()
 
 # Засеять демо-пользователей при пустой БД (admin-bot startup)
-SEED_DEMO_USERS = _env_bool("SEED_DEMO_USERS", default=False)
+SEED_DEMO_USERS: bool = _env_bool("SEED_DEMO_USERS", default=False)
+
+# ---------------------------------------------------------------------------
+# Тарифы и пагинация (admin-bot UI)
+# ---------------------------------------------------------------------------
+
+TARIFFS: tuple[str, ...] = ("LITE", "POWER", "POWER+")
+
+USERS_PER_PAGE: int = _env_int("USERS_PER_PAGE", 10)
+TRANSFERS_PER_PAGE: int = _env_int("TRANSFERS_PER_PAGE", 10)
+HISTORY_PER_PAGE: int = _env_int("HISTORY_PER_PAGE", 10)
