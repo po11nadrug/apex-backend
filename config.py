@@ -9,6 +9,15 @@ ADMIN_BOT_TOKEN = os.getenv("ADMIN_BOT_TOKEN", "").strip()
 # Токен бота ПРИЛОЖЕНИЯ (клиенты жмут /start здесь)
 USER_BOT_TOKEN = os.getenv("USER_BOT_TOKEN", "").strip()
 
+# Совместимость: bot.py и старые скрипты ждут BOT_TOKEN
+# Приоритет: BOT_TOKEN → ADMIN_BOT_TOKEN → USER_BOT_TOKEN
+BOT_TOKEN = (
+    os.getenv("BOT_TOKEN", "").strip()
+    or ADMIN_BOT_TOKEN
+    or USER_BOT_TOKEN
+    or ""
+)
+
 SECRET_KEY = os.getenv("SECRET_KEY", "").strip()
 WEBAPP_URL = os.getenv("WEBAPP_URL", "").strip()
 
@@ -27,8 +36,5 @@ if not SECRET_KEY:
 if not ADMIN_IDS:
     raise ValueError("Не указан ADMIN_IDS в файле .env")
 
-# Хотя бы один бот должен быть настроен для Telegram
-if not ADMIN_BOT_TOKEN and not USER_BOT_TOKEN:
-    raise ValueError(
-        "Укажите USER_BOT_TOKEN (бот приложения) и/или ADMIN_BOT_TOKEN в .env"
-    )
+# Токены опциональны: пустая строка вместо raise — API/сервис не падает на импорте.
+# bot.py сам проверит BOT_TOKEN при старте polling.
